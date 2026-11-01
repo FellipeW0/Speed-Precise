@@ -1,0 +1,18 @@
+[package]
+name = "speed-precise-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Command-line interface for Speed Precise DirectInput8 telemetry, live calibration, Step Log 2, and LUT auto-tune"
+
+[[bin]]
+name = "speed-precise-cli"
+path = "src/main.rs"
+
+[dependencies]
+speed-precise-core = { path = "../speed-precise-core" }
+clap.workspace = true
+ctrlc.workspace = true
+serde_json.workspace = true

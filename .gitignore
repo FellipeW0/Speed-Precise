@@ -1,0 +1,34 @@
+# ==============================================================================
+# Speed Precise — Strict Git Ignore Rules
+# ==============================================================================
+
+# Rust / Cargo Build Artifacts & Distributable Packages
+/target/
+/dist/
+
+# Read-Only Reverse Engineering & Legacy Binaries (Never Committed)
+/decompiled _apps/
+/decompiled_apps/
+/Documentation/
+/ghidra_*/
+/DIView/
+/WheelCheck/
+/LUTGenerator/
+/*.exe
+/*.dll
+/*.pdb
+
+# Local Telemetry Captures, LUT Exports, Screenshots & Backups
+/*.csv
+/*.lut
+/*.png
+/*.bak
+*.log
+*.tmp
+
+# OS & Editor Metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

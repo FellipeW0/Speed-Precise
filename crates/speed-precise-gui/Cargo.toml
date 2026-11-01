@@ -1,0 +1,15 @@
+[package]
+name = "speed-precise-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unified Native Desktop GUI (DIView + WheelCheck Step Log 2 + LUT Generator) for Speed Precise"
+
+[dependencies]
+speed-precise-core = { path = "../speed-precise-core" }
+eframe.workspace = true
+egui.workspace = true
+egui_plot.workspace = true
+rfd.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "speed-precise-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core DirectInput8 FFI, Dual-Handle Telemetry, FFB Step Log 2 (1000 Hz), and Inverse LUT Engine for Speed Precise"
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
