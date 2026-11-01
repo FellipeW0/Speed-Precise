@@ -11,9 +11,9 @@
 
 ## Visão Geral
 
-Durante anos, pilotos de simuladores no PC precisaram alternar entre **três utilitários legados distintos** — *DIView* (para calibrar curso e zona morta de pedais no driver DirectInput), *WheelCheck* (para medir a resposta não-linear e a zona morta mecânica dos motores de Force Feedback) e *LUT Generator* (para converter o `log2.csv` em uma tabela `.lut` para o Assetto Corsa).
+O **Speed Precise v1.0** foi desenvolvido para substituir e unificar todo o fluxo de calibração de pedais, análise de Force Feedback e geração de curvas LUT em **um único aplicativo nativo em Rust (`SpeedPrecise.exe`)**, 100% portátil, sem instaladores ou dependências de `.NET` ou `VC++ Redistributable`, projetado com foco em precisão de nível de driver e segurança mecânica para volantes USB DirectInput8 (Logitech G25/G27/G29/G920/G923, Thrustmaster, Fanatec e pedaleiras USB dedicadas).
 
-O **Speed Precise v1.0** substitui e unifica todo esse fluxo em **um único aplicativo nativo em Rust (`SpeedPrecise.exe`)**, 100% portátil, sem instaladores, sem dependências de `.NET` ou `VC++ Redistributable`, projetado com foco em precisão de nível de driver e segurança mecânica para volantes USB DirectInput8 (Logitech G25/G27/G29/G920/G923, Thrustmaster, Fanatec e pedaleiras USB dedicadas).
+A calibração de pedais, a análise da resposta dos motores de Force Feedback e a geração de curvas LUT são tarefas tradicionalmente distribuídas entre **três utilitários independentes** — *DIView* (para calibrar curso e zona morta de pedais no driver DirectInput), *WheelCheck* (para medir a resposta não-linear e a zona morta mecânica dos motores de Force Feedback) e *LUT Generator* (para converter o `log2.csv` em uma tabela `.lut` para o Assetto Corsa).
 
 ---
 
