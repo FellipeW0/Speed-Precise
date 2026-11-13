@@ -6,11 +6,27 @@ O formato segue os princípios do [Keep a Changelog](https://keepachangelog.com/
 
 ---
 
-## [1.0.1] - 2026-11-12
+## [1.0.2] - 2026-11-13
 
 ### Adicionado
 - **Ícone Oficial do Aplicativo (`Speed_Precise.ico`):**
-  - Incorporação nativa do ícone oficial (`256×256`) nos recursos PE do Windows (`RT_ICON` / `RT_GROUP_ICON` + metadados `VS_VERSION_INFO` em `SpeedPrecise.exe` via `build.rs`) e no ícone da janela, barra de título e barra de tarefas (`ViewportBuilder::with_icon`).
+  - Incorporação nativa do ícone oficial (`256×256`) nos recursos PE do Windows (`RT_ICON` / `RT_GROUP_ICON` + metadados `VS_VERSION_INFO` em `SpeedPrecise.exe` via `build.rs`) e no ícone da janela, barra de título e barra de tarefas (`ViewportBuilder::with_icon`), mantendo o cabeçalho interno limpo.
+
+### Corrigido
+- **Sobreposição no Eixo Y do Gráfico Force Feedback (LUT):**
+  - Configurada largura mínima dedicada para a coluna do eixo Y (`LUT_PLOT_Y_AXIS_MIN_WIDTH = 48.0`) no `Plot`, eliminando a sobreposição visual entre o texto vertical `"Resposta do Volante / Torque Corrigido (0.00 a 1.00)"` e os valores numéricos do eixo (`0.0`..`0.9`).
+- **Poluição Visual no Fundo do Gráfico LUT:**
+  - Substituído o espaçador logarítmico padrão por espaçamento uniforme adaptativo (`clean_unit_grid_step_sizes`: passos limpos de `0.1` na visão `[0.0, 1.0]`), removendo as dezenas de linhas secundárias mais escuras (`0.01`) que poluíam o fundo do gráfico.
+
+### Alterado
+- **Cartão de Controles do Auto-LUT em Largura Total:**
+  - Expandida a barra de parâmetros (*Passos de Leitura*, *Ângulo do Volante* e botões *Iniciar Teste e Gerar LUT* / *Importar CSV*) para preencher 100% da largura horizontal disponível sem área vazia à direita, com espaçamento proporcional entre controles e fallback responsivo em telas estreitas.
+- **Passos de Leitura Até `200`:**
+  - Limite superior do controle deslizante `Passos de Leitura` ampliado de `10..=100` para **`10..=200`** (`MAX_STEP_LOG2_UI_STEPS = 200`).
+
+---
+
+## [1.0.1] - 2026-11-12
 
 ### Corrigido
 - **Barra de Ângulo do Volante em Tempo Real (`Volante e Pedais`):**

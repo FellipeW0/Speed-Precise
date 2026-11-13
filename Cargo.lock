@@ -2440,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "speed-precise-cli"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "clap",
  "ctrlc",
@@ -2450,7 +2450,7 @@ dependencies = [
 
 [[package]]
 name = "speed-precise-core"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2459,7 +2459,7 @@ dependencies = [
 
 [[package]]
 name = "speed-precise-gui"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "eframe",
  "egui",

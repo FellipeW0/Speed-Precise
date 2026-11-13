@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Rounding, Sense, Stroke, Vec2};
-use egui_plot::{Legend, Line, LineStyle, Plot, PlotBounds, PlotPoints};
+use egui_plot::{
+    uniform_grid_spacer, GridInput, Legend, Line, LineStyle, Plot, PlotBounds, PlotPoints,
+};
 use speed_precise_core::{
     compute_pedal_press_percentages, compute_smart_pedal_calibration, compute_steering_angle_deg,
     default_assetto_corsa_cfg_dir, default_pedal_inverted, evaluate_calibrated_output_pct,
@@ -61,6 +63,25 @@ const COLOR_BADGE_OK: Color32 = Color32::from_rgb(39, 174, 96);
 pub const MIN_LUT_ZOOM_SPAN: f64 = 0.05;
 /// Maximum zoom span (`100%` of `[0.0, 1.0]`) allowed inside the bounded LUT chart.
 pub const MAX_LUT_ZOOM_SPAN: f64 = 1.0;
+/// Minimum (`10`) and maximum (`200`) `Passos de Leitura` exposed in the Auto-LUT studio slider.
+pub const MIN_STEP_LOG2_UI_STEPS: u32 = 10;
+pub const MAX_STEP_LOG2_UI_STEPS: u32 = 200;
+/// Reserved minimum width (in UI points) for the LUT chart Y-axis column so the rotated
+/// Y-axis title never overlaps numeric tick labels (`0.0`..`1.0`).
+pub const LUT_PLOT_Y_AXIS_MIN_WIDTH: f32 = 48.0;
+
+/// Adaptive major-only grid step sizes for `[0.0, 1.0]` LUT plots, avoiding dense dark sub-grid lines.
+pub fn clean_unit_grid_step_sizes(bounds: (f64, f64)) -> [f64; 3] {
+    let span = (bounds.1 - bounds.0).abs();
+    let step = if span > 0.35 {
+        0.1
+    } else if span > 0.15 {
+        0.02
+    } else {
+        0.01
+    };
+    [step, step, step]
+}
 
 /// Active screen in the clean 2-screen Speed Precise dashboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1448,9 +1469,103 @@ impl SpeedPreciseApp {
     // Screen 2 — Unified Auto-LUT Generator (1-Click Test + Bounded [0, 1] Plot)
     // ========================================================================
 
+    fn render_autolut_parameter_controls(&mut self, ui: &mut egui::Ui, slider_width: f32, group_gap: f32) {
+        // Input 1: Passos de Leitura (10..=200, default 50)
+        ui.label(RichText::new("Passos de Leitura:").strong());
+        ui.scope(|ui| {
+            ui.spacing_mut().slider_width = slider_width;
+            ui.add(
+                egui::Slider::new(
+                    &mut self.step_count,
+                    MIN_STEP_LOG2_UI_STEPS..=MAX_STEP_LOG2_UI_STEPS,
+                )
+                .clamping(egui::SliderClamping::Always),
+            );
+        });
+
+        ui.add_space(group_gap);
+        ui.separator();
+        ui.add_space(group_gap);
+
+        // Input 2: Ângulo do Volante (°)
+        ui.label(RichText::new("Ângulo do Volante:").strong());
+        for preset in [540.0_f64, 900.0_f64, 1080.0_f64] {
+            let active = (self.step_max_angle_deg - preset).abs() < 0.5;
+            if ui
+                .selectable_label(active, format!("{preset:.0}°"))
+                .clicked()
+            {
+                self.step_max_angle_deg = preset;
+            }
+        }
+        ui.add(
+            egui::DragValue::new(&mut self.step_max_angle_deg)
+                .range(180.0..=2_520.0)
+                .speed(10.0)
+                .suffix("°")
+                .max_decimals(0),
+        );
+    }
+
+    fn render_import_csv_button(&mut self, ui: &mut egui::Ui) {
+        if add_icon_button(
+            ui,
+            VectorIcon::Folder,
+            "Importar CSV",
+            12.5_f32,
+            Vec2::new(130.0_f32, 34.0_f32),
+            None,
+            None,
+            6.0_f32,
+        )
+        .on_hover_text("Carregar um arquivo CSV existente do WheelCheck")
+        .clicked()
+        {
+            if let Some(path) = rfd::FileDialog::new()
+                .set_title("Importar arquivo CSV de leitura do volante")
+                .add_filter("Arquivo CSV (*.csv)", &["csv"])
+                .pick_file()
+            {
+                self.import_csv_from_path(&path);
+            }
+        }
+    }
+
+    fn render_start_step_log2_button(&mut self, ui: &mut egui::Ui) {
+        if add_icon_button(
+            ui,
+            VectorIcon::Play,
+            "Iniciar Teste e Gerar LUT",
+            13.5_f32,
+            Vec2::new(225.0_f32, 34.0_f32),
+            Some(COLOR_BADGE_OK),
+            None,
+            6.0_f32,
+        )
+        .on_hover_text(
+            "Executa a leitura automática do motor do volante e exibe imediatamente a curva LUT pronta.",
+        )
+        .clicked()
+        {
+            self.launch_step_log2();
+        }
+    }
+
+    fn render_autolut_cta_buttons(&mut self, ui: &mut egui::Ui, right_to_left: bool) {
+        if right_to_left {
+            self.render_import_csv_button(ui);
+            ui.add_space(8.0_f32);
+            self.render_start_step_log2_button(ui);
+        } else {
+            self.render_start_step_log2_button(ui);
+            ui.add_space(8.0_f32);
+            self.render_import_csv_button(ui);
+        }
+    }
+
     fn render_screen_autolut(&mut self, ui: &mut egui::Ui) {
         // --------------------------------------------------------------------
-        // 1. Minimal Control Card + Contextual Progress / Stop Strip
+        // 1. Full-Width Control Card + Contextual Progress / Stop Strip
         // --------------------------------------------------------------------
         egui::Frame::none()
             .fill(COLOR_BG_CARD)
@@ -1458,81 +1573,27 @@ impl SpeedPreciseApp {
             .rounding(Rounding::same(8.0_f32))
             .inner_margin(egui::Margin::symmetric(16.0_f32, 12.0_f32))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.add_enabled_ui(!self.ffb_running, |ui| {
-                        // Input 1: Passos de Leitura (default 50)
-                        ui.label(RichText::new("Passos de Leitura:").strong());
-                        ui.add(
-                            egui::Slider::new(&mut self.step_count, 10..=100)
-                                .clamping(egui::SliderClamping::Always),
-                        );
+                let avail_w = ui.available_width();
+                ui.set_min_width(avail_w);
 
-                        ui.add_space(10.0_f32);
-                        ui.separator();
-                        ui.add_space(10.0_f32);
-
-                        // Input 2: Ângulo do Volante (°)
-                        ui.label(RichText::new("Ângulo do Volante:").strong());
-                        for preset in [540.0_f64, 900.0_f64, 1080.0_f64] {
-                            let active = (self.step_max_angle_deg - preset).abs() < 0.5;
-                            if ui
-                                .selectable_label(active, format!("{preset:.0}°"))
-                                .clicked()
-                            {
-                                self.step_max_angle_deg = preset;
-                            }
-                        }
-                        ui.add(
-                            egui::DragValue::new(&mut self.step_max_angle_deg)
-                                .range(180.0..=2_520.0)
-                                .speed(10.0)
-                                .suffix("°")
-                                .max_decimals(0),
-                        );
-
-                        ui.add_space(14.0_f32);
-
-                        // Input 3: Primary CTA [Iniciar Teste e Gerar LUT] + Discreet [Importar CSV]
-                        if add_icon_button(
-                            ui,
-                            VectorIcon::Play,
-                            "Iniciar Teste e Gerar LUT",
-                            13.5_f32,
-                            Vec2::new(225.0_f32, 34.0_f32),
-                            Some(COLOR_BADGE_OK),
-                            None,
-                            6.0_f32,
-                        )
-                        .on_hover_text(
-                            "Executa a leitura automática do motor do volante e exibe imediatamente a curva LUT pronta.",
-                        )
-                        .clicked()
-                        {
-                            self.launch_step_log2();
-                        }
-
-                        if add_icon_button(
-                            ui,
-                            VectorIcon::Folder,
-                            "Importar CSV",
-                            12.5_f32,
-                            Vec2::new(130.0_f32, 34.0_f32),
-                            None,
-                            None,
-                            6.0_f32,
-                        )
-                        .on_hover_text("Carregar um arquivo CSV existente do WheelCheck")
-                        .clicked()
-                        {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_title("Importar arquivo CSV de leitura do volante")
-                                .add_filter("Arquivo CSV (*.csv)", &["csv"])
-                                .pick_file()
-                            {
-                                self.import_csv_from_path(&path);
-                            }
-                        }
-                    });
+                ui.add_enabled_ui(!self.ffb_running, |ui| {
+                    if avail_w >= 960.0_f32 {
+                        let extra = (avail_w - 960.0_f32).max(0.0_f32);
+                        let slider_w = (135.0_f32 + extra * 0.22_f32).clamp(135.0_f32, 220.0_f32);
+                        let group_gap = (12.0_f32 + extra * 0.08_f32).clamp(12.0_f32, 32.0_f32);
+                        ui.horizontal(|ui| {
+                            self.render_autolut_parameter_controls(ui, slider_w, group_gap);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                self.render_autolut_cta_buttons(ui, true);
+                            });
+                        });
+                    } else {
+                        ui.horizontal_wrapped(|ui| {
+                            self.render_autolut_parameter_controls(ui, 130.0_f32, 10.0_f32);
+                            ui.add_space(10.0_f32);
+                            self.render_autolut_cta_buttons(ui, false);
+                        });
+                    }
                 });
 
                 // Contextual Progress Bar & Emergency Stop Button — Shown ONLY while `ffb_running == true`!
@@ -1688,6 +1749,13 @@ impl SpeedPreciseApp {
                     .allow_boxed_zoom(false)
                     .allow_double_click_reset(false)
                     .set_margin_fraction(Vec2::ZERO)
+                    .x_grid_spacer(uniform_grid_spacer(|input: GridInput| {
+                        clean_unit_grid_step_sizes(input.bounds)
+                    }))
+                    .y_grid_spacer(uniform_grid_spacer(|input: GridInput| {
+                        clean_unit_grid_step_sizes(input.bounds)
+                    }))
+                    .y_axis_min_width(LUT_PLOT_Y_AXIS_MIN_WIDTH)
                     .x_axis_label("Força Enviada pelo Jogo (0.00 a 1.00)")
                     .y_axis_label("Resposta do Volante / Torque Corrigido (0.00 a 1.00)");
 
@@ -2786,5 +2854,42 @@ mod tests {
         // And with no snapshot yet, default safely to center 0°
         let (angle_none, pct_none) = compute_live_steering_angle_and_pct(None, 900.0);
         assert!(angle_none.abs() < 1e-6 && pct_none.abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_autolut_step_count_200_and_clean_grid_without_dense_sublines() {
+        // 1. UI slider upper bound must support 200 reading steps
+        assert_eq!(MIN_STEP_LOG2_UI_STEPS, 10);
+        assert_eq!(MAX_STEP_LOG2_UI_STEPS, 200);
+        assert!(LUT_PLOT_Y_AXIS_MIN_WIDTH >= 44.0_f32);
+
+        // 2. Unit-square plot grid at default zoom must emit clean major 0.1 intervals without 0.01 dark sub-lines
+        assert_eq!(clean_unit_grid_step_sizes((0.0, 1.0)), [0.1, 0.1, 0.1]);
+        assert_eq!(clean_unit_grid_step_sizes((0.2, 0.45)), [0.02, 0.02, 0.02]);
+        assert_eq!(clean_unit_grid_step_sizes((0.1, 0.18)), [0.01, 0.01, 0.01]);
+
+        // 3. Running 200 steps end-to-end computes a valid 101-point inverse LUT cleanly
+        let mut app = SpeedPreciseApp::new_headless_for_test(WorkerConfig {
+            telemetry_poll_interval: Duration::from_millis(25),
+            dry_run_step_delay: Duration::ZERO,
+            enable_physical_dinput: false,
+        });
+        app.step_dry_run = true;
+        app.step_count = MAX_STEP_LOG2_UI_STEPS;
+        app.launch_step_log2();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.ffb_running && Instant::now() < deadline {
+            app.pump_worker_events();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        assert!(!app.ffb_running);
+        assert_eq!(app.step_samples.len(), 201);
+        let lut = app
+            .lut_result
+            .as_ref()
+            .expect("200-step Auto-LUT run must produce a valid inverse LUT");
+        assert_eq!(lut.points.len(), 101);
     }
 }
