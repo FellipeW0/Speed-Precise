@@ -1,5 +1,5 @@
 //! Official application icon loader decoding the root `Speed_Precise.ico` asset
-//! for both the OS window/taskbar (`egui::IconData`) and the cockpit header badge.
+//! for the OS window, titlebar, taskbar, and Alt+Tab switcher (`egui::IconData`).
 
 /// Embedded official application icon bytes from the workspace root (`Speed_Precise.ico`).
 pub const APP_ICON_ICO_BYTES: &[u8] = include_bytes!("../../../Speed_Precise.ico");
@@ -56,20 +56,6 @@ pub fn extract_largest_png_from_ico(ico_bytes: &[u8]) -> Option<&[u8]> {
 pub fn load_app_icon_data() -> Option<egui::IconData> {
     let png_slice = extract_largest_png_from_ico(APP_ICON_ICO_BYTES)?;
     eframe::icon_data::from_png_bytes(png_slice).ok()
-}
-
-/// Loads `Speed_Precise.ico` as an `egui::TextureHandle` for the clean top header brand badge.
-pub fn load_app_icon_texture(ctx: &egui::Context) -> Option<egui::TextureHandle> {
-    let icon = load_app_icon_data()?;
-    let color_image = egui::ColorImage::from_rgba_unmultiplied(
-        [icon.width as usize, icon.height as usize],
-        &icon.rgba,
-    );
-    Some(ctx.load_texture(
-        "speed_precise_official_logo",
-        color_image,
-        egui::TextureOptions::LINEAR,
-    ))
 }
 
 #[cfg(test)]

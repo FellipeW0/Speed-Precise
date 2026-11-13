@@ -312,7 +312,6 @@ pub fn compute_live_steering_angle_and_pct(
 pub struct SpeedPreciseApp {
     pub active_screen: ActiveScreen,
     worker: HardwareWorker,
-    app_logo_texture: Option<egui::TextureHandle>,
 
     // Connected USB controllers & live 60 Hz telemetry
     pub devices: Vec<DeviceInfo>,
@@ -354,9 +353,7 @@ impl SpeedPreciseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         configure_cockpit_dark_theme(&cc.egui_ctx);
         let worker = HardwareWorker::spawn(Some(cc.egui_ctx.clone()));
-        let mut app = Self::with_worker(worker);
-        app.app_logo_texture = crate::app_icon::load_app_icon_texture(&cc.egui_ctx);
-        app
+        Self::with_worker(worker)
     }
 
     /// Headless constructor used for deterministic unit testing of UI state transitions,
@@ -370,7 +367,6 @@ impl SpeedPreciseApp {
         Self {
             active_screen: ActiveScreen::CockpitDashboard,
             worker,
-            app_logo_texture: None,
             devices: Vec::new(),
             selected_device_idx: 0,
             live_telemetry: HashMap::new(),
@@ -692,21 +688,7 @@ impl SpeedPreciseApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    // 1. Clean App Brand (+ Official App Icon Badge)
-                    if let Some(logo) = &self.app_logo_texture {
-                        egui::Frame::none()
-                            .fill(Color32::from_rgb(236, 236, 236))
-                            .rounding(Rounding::same(6.0_f32))
-                            .stroke(Stroke::new(1.0_f32, COLOR_BORDER_SUBTLE))
-                            .inner_margin(egui::Margin::same(2.0_f32))
-                            .show(ui, |ui| {
-                                ui.add(
-                                    egui::Image::from_texture(logo)
-                                        .fit_to_exact_size(Vec2::splat(32.0_f32)),
-                                );
-                            });
-                        ui.add_space(6.0_f32);
-                    }
+                    // 1. Clean App Brand
                     ui.vertical(|ui| {
                         ui.label(
                             RichText::new("SPEED PRECISE")
@@ -721,9 +703,9 @@ impl SpeedPreciseApp {
                         );
                     });
 
-                    ui.add_space(10.0_f32);
+                    ui.add_space(16.0_f32);
                     ui.separator();
-                    ui.add_space(8.0_f32);
+                    ui.add_space(10.0_f32);
 
                     // 2. Clean 2-Screen Navigation Switcher
                     ui.add_enabled_ui(!self.ffb_running, |ui| {

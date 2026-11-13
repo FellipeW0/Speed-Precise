@@ -10,7 +10,7 @@ O formato segue os princípios do [Keep a Changelog](https://keepachangelog.com/
 
 ### Adicionado
 - **Ícone Oficial do Aplicativo (`Speed_Precise.ico`):**
-  - Incorporação nativa do ícone oficial (`256×256`) nos recursos PE do Windows (`RT_ICON` / `RT_GROUP_ICON` + metadados `VS_VERSION_INFO` em `SpeedPrecise.exe` via `build.rs`), no ícone da janela e barra de tarefas (`ViewportBuilder::with_icon`) e no emblema de marca do cabeçalho superior.
+  - Incorporação nativa do ícone oficial (`256×256`) nos recursos PE do Windows (`RT_ICON` / `RT_GROUP_ICON` + metadados `VS_VERSION_INFO` em `SpeedPrecise.exe` via `build.rs`) e no ícone da janela, barra de título e barra de tarefas (`ViewportBuilder::with_icon`).
 
 ### Corrigido
 - **Barra de Ângulo do Volante em Tempo Real (`Volante e Pedais`):**
