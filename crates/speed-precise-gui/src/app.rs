@@ -269,6 +269,45 @@ pub fn compute_live_pedal_display_percentages(
     )
 }
 
+/// Computes the live steering wheel angle in degrees and signed travel percentage
+/// (`-100..=100`, where `0` is center) for an [`AxisTelemetrySnapshot`].
+///
+/// Mirrors [`compute_live_pedal_display_percentages`]: if `dinput8.dll`'s cooked
+/// handle sits on its `32767` (`50.0%`) buffer reset or diverges from the calibrated
+/// model while the raw sensor moves away from center, evaluates the live angle
+/// directly from `snap.raw_value`.
+pub fn compute_live_steering_angle_and_pct(
+    snap: Option<&AxisTelemetrySnapshot>,
+    wheel_rotation_deg: f64,
+) -> (f64, f64) {
+    let Some(snap) = snap else {
+        return compute_steering_angle_deg(50.0, wheel_rotation_deg);
+    };
+
+    let model_pct = evaluate_calibrated_output_pct(
+        snap.raw_value,
+        snap.calibration,
+        snap.deadzone,
+        snap.saturation,
+    );
+
+    let (l_min, l_max) = snap.logical_range;
+    let l_span = ((l_max as f64) - (l_min as f64)).abs().max(1.0);
+    let l_mid = ((l_min as f64) + (l_max as f64)) * 0.5;
+    let raw_away_from_center = ((snap.raw_value as f64) - l_mid).abs() > (l_span * 0.001).max(1.5);
+    let cooked_near_reset_mid = (snap.cooked_percent - 50.0).abs() <= 0.6;
+
+    let effective_cooked_pct = if (cooked_near_reset_mid && raw_away_from_center)
+        || ((snap.cooked_percent - model_pct).abs() > 1.5 && raw_away_from_center)
+    {
+        model_pct
+    } else {
+        snap.cooked_percent
+    };
+
+    compute_steering_angle_deg(effective_cooked_pct, wheel_rotation_deg)
+}
+
 /// Top-level `eframe::App` state for **Speed Precise**.
 pub struct SpeedPreciseApp {
     pub active_screen: ActiveScreen,
@@ -1003,14 +1042,12 @@ impl SpeedPreciseApp {
             .and_then(|id| dev.axes.iter().find(|a| a.dw_type == id))
             .cloned();
 
-        let cooked_pct = steering_axis
+        let steering_snap = steering_axis
             .as_ref()
-            .and_then(|ax| self.live_telemetry.get(&ax.dw_type))
-            .map(|snap| snap.cooked_percent)
-            .unwrap_or(50.0);
+            .and_then(|ax| self.live_telemetry.get(&ax.dw_type));
 
         let (angle_deg, signed_pct) =
-            compute_steering_angle_deg(cooked_pct, self.step_max_angle_deg);
+            compute_live_steering_angle_and_pct(steering_snap, self.step_max_angle_deg);
 
         egui::Frame::none()
             .fill(COLOR_BG_CARD)
@@ -1917,13 +1954,13 @@ fn clean_axis_display_name(raw_name: &str, standard_label: &str) -> String {
 
 /// Paints a sleek horizontal center-zero steering bar (`0°` at center, `-half_rot°` Left to `+half_rot°` Right).
 fn paint_horizontal_steering_gauge(ui: &mut egui::Ui, signed_pct: f64, wheel_rotation_deg: f64) {
-    let desired_size = Vec2::new(ui.available_width().max(200.0_f32), 48.0_f32);
+    let desired_size = Vec2::new(ui.available_width().max(200.0_f32), 50.0_f32);
     let (outer_rect, _) = ui.allocate_exact_size(desired_size, Sense::hover());
     let painter = ui.painter_at(outer_rect);
 
     let bar_rect = Rect::from_min_max(
-        outer_rect.min,
-        Pos2::new(outer_rect.max.x, outer_rect.min.y + 28.0_f32),
+        Pos2::new(outer_rect.min.x, outer_rect.min.y + 2.0_f32),
+        Pos2::new(outer_rect.max.x, outer_rect.min.y + 30.0_f32),
     );
 
     // Track background
@@ -1950,11 +1987,7 @@ fn paint_horizontal_steering_gauge(ui: &mut egui::Ui, signed_pct: f64, wheel_rot
             Pos2::new(x_min, bar_rect.top() + 2.0_f32),
             Pos2::new(x_max, bar_rect.bottom() - 2.0_f32),
         );
-        painter.rect_filled(
-            fill_rect,
-            Rounding::same(4.0_f32),
-            COLOR_STEERING_FILL.gamma_multiply(0.82_f32),
-        );
+        painter.rect_filled(fill_rect, Rounding::same(4.0_f32), COLOR_STEERING_FILL);
     }
 
     // Quarter & center grid ticks
@@ -2700,5 +2733,58 @@ mod tests {
         assert!(COLOR_BG_CARD.r() >= 30 && COLOR_BG_CARD.r() <= 44);
         assert!(COLOR_TEXT_PRIMARY.r() >= 235);
         assert!(COLOR_TEXT_MUTED.r() >= 150);
+    }
+
+    #[test]
+    fn test_steering_gauge_updates_live_when_cooked_stuck_at_50pct() {
+        let make_wheel_snap = |raw_val: i32, cooked_pct: f64| AxisTelemetrySnapshot {
+            axis_index: 0,
+            dw_type: 0x0100_0002,
+            instance_id: 0,
+            name: "Wheel axis".to_string(),
+            standard_label: "X Axis",
+            raw_value: raw_val,
+            cooked_value: 32_767,
+            logical_range: (0, 65_535),
+            output_range: (0, 65_535),
+            calibration: AxisCalibration::default_reset(0, 65_535),
+            deadzone: 0,
+            saturation: 10_000,
+            cooked_percent: cooked_pct,
+        };
+
+        // When DirectInput's cooked buffer is stuck at 50.0% (`32767`), live angle bar must still track raw travel
+        for (raw, expected_signed_pct) in [
+            (0_i32, -100.0_f64),
+            (16_384_i32, -50.0_f64),
+            (32_768_i32, 0.0_f64),
+            (49_152_i32, 50.0_f64),
+            (65_535_i32, 100.0_f64),
+        ] {
+            let snap = make_wheel_snap(raw, 50.0);
+            for preset in [540.0_f64, 900.0_f64, 1080.0_f64] {
+                let (angle_deg, signed_pct) = compute_live_steering_angle_and_pct(Some(&snap), preset);
+                let expected_angle = (expected_signed_pct / 100.0) * (preset * 0.5);
+                assert!(
+                    (signed_pct - expected_signed_pct).abs() < 0.1,
+                    "raw={raw} preset={preset}: expected signed_pct={expected_signed_pct}, got {signed_pct}"
+                );
+                assert!(
+                    (angle_deg - expected_angle).abs() < 0.25,
+                    "raw={raw} preset={preset}: expected angle={expected_angle}, got {angle_deg}"
+                );
+            }
+        }
+
+        // Conversely, if only cooked telemetry moves while raw sits at logical midpoint, honor cooked telemetry
+        let cooked_driven = make_wheel_snap(32_768, 25.0);
+        let (angle_cooked, pct_cooked) =
+            compute_live_steering_angle_and_pct(Some(&cooked_driven), 900.0);
+        assert!((pct_cooked + 50.0).abs() < 0.1);
+        assert!((angle_cooked + 225.0).abs() < 0.25);
+
+        // And with no snapshot yet, default safely to center 0°
+        let (angle_none, pct_none) = compute_live_steering_angle_and_pct(None, 900.0);
+        assert!(angle_none.abs() < 1e-6 && pct_none.abs() < 1e-6);
     }
 }

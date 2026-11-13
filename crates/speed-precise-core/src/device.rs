@@ -9,7 +9,7 @@ use std::ptr;
 use crate::calibration::{
     default_backup_dir, evaluate_calibrated_output_pct, get_axis_calibration, get_axis_range,
     get_deadzone, get_saturation, persist_calibration_backup_in_dir, set_axis_calibration,
-    set_calibration_mode, set_deadzone, set_saturation, AxisCalibration,
+    set_axis_range, set_calibration_mode, set_deadzone, set_saturation, AxisCalibration,
 };
 use crate::dinput_ffi::{
     axis_guid_name, didft_get_instance, DirectInput8Create, GetModuleHandleW, DiDataFormat,
@@ -139,6 +139,8 @@ impl CockpitAxisMapping {
                 || n.contains("steer")
                 || n.contains("volante")
                 || n.contains("dire")
+                || n == "x axis"
+                || n == "eixo x"
         });
         claim(&mut mapping.clutch, &|a| {
             let n = a.name.to_ascii_lowercase();
@@ -398,6 +400,7 @@ unsafe extern "system" fn enum_axes_callback(
 ///   `DIDATAFORMAT` mapping each discovered axis `i` to byte offset `i * 4`.
 pub struct DualDeviceHandle {
     pub info: ControllerDeviceInfo,
+    mapping: CockpitAxisMapping,
     p_cooked_device: *mut IDirectInputDevice8W,
     p_raw_device: *mut IDirectInputDevice8W,
     _object_formats: Vec<DiObjectDataFormat>,
@@ -405,6 +408,8 @@ pub struct DualDeviceHandle {
     cooked_state_buf: Vec<i32>,
     cooked_awaiting_hid_sync: Vec<bool>,
     sync_ref_raw: Vec<i32>,
+    awaiting_initial_hid_report: bool,
+    initial_probe_raw: Vec<i32>,
 }
 
 impl DualDeviceHandle {
@@ -468,25 +473,67 @@ impl DualDeviceHandle {
                 coop_flags,
             );
 
-            // Set DIPROP_CALIBRATIONMODE (0x0A) = DIPROPCALIBRATIONMODE_RAW (1) on p_raw_device for every axis
+            // Configure output range on `p_cooked_device` and `DIPROP_CALIBRATIONMODE = RAW (1)` on `p_raw_device`
             for axis in &info.axes {
+                let _ = set_axis_range(
+                    p_cooked_device,
+                    axis.dw_type,
+                    axis.output_range.0,
+                    axis.output_range.1,
+                );
                 let _ = set_calibration_mode(p_raw_device, axis.dw_type, true);
             }
 
             let _ = ((*(*p_cooked_device).lp_vtbl).acquire)(p_cooked_device);
             let _ = ((*(*p_raw_device).lp_vtbl).acquire)(p_raw_device);
+            let _ = ((*(*p_cooked_device).lp_vtbl).poll)(p_cooked_device);
+            let _ = ((*(*p_raw_device).lp_vtbl).poll)(p_raw_device);
+
+            let mapping = CockpitAxisMapping::detect(&info);
+            let mut raw_state_buf = vec![0i32; data_size_i32];
+            let mut cooked_state_buf = vec![0i32; data_size_i32];
+            let awaiting_initial_hid_report = if info.axes.is_empty() {
+                false
+            } else {
+                let byte_len = (data_size_i32 * size_of::<i32>()) as u32;
+                let raw_probe_ok = poll_and_get_state(
+                    p_raw_device,
+                    byte_len,
+                    raw_state_buf.as_mut_ptr().cast::<c_void>(),
+                )
+                .is_ok();
+                let cooked_probe_ok = poll_and_get_state(
+                    p_cooked_device,
+                    byte_len,
+                    cooked_state_buf.as_mut_ptr().cast::<c_void>(),
+                )
+                .is_ok();
+                !raw_probe_ok
+                    || !cooked_probe_ok
+                    || all_axes_at_dinput_midpoint(&info.axes, &raw_state_buf, &cooked_state_buf)
+            };
+            let initial_probe_raw = raw_state_buf.clone();
 
             Ok(Self {
                 info,
+                mapping,
                 p_cooked_device,
                 p_raw_device,
                 _object_formats: object_formats,
-                raw_state_buf: vec![0i32; data_size_i32],
-                cooked_state_buf: vec![0i32; data_size_i32],
+                raw_state_buf,
+                cooked_state_buf,
                 cooked_awaiting_hid_sync: vec![false; data_size_i32],
                 sync_ref_raw: vec![0i32; data_size_i32],
+                awaiting_initial_hid_report,
+                initial_probe_raw,
             })
         }
+    }
+
+    /// Returns `true` once DirectInput8 has delivered at least one real hardware HID packet
+    /// after opening/acquiring the device (as opposed to `dinput8.dll`'s initial midpoint buffer).
+    pub fn has_received_initial_hid_report(&self) -> bool {
+        !self.awaiting_initial_hid_report
     }
 
     /// Resolves a user-supplied `--axis <id>` selector to a reference in `self.info.axes`.
@@ -546,38 +593,42 @@ impl DualDeviceHandle {
             )?;
         }
 
+        if self.awaiting_initial_hid_report
+            && detect_initial_hid_report_arrival(
+                &self.info.axes,
+                &self.raw_state_buf,
+                &self.cooked_state_buf,
+                &self.initial_probe_raw,
+            )
+        {
+            self.awaiting_initial_hid_report = false;
+        }
+
         let mut snapshots = Vec::with_capacity(self.info.axes.len());
         for (i, axis) in self.info.axes.iter().enumerate() {
-            let raw_value = self.raw_state_buf[i];
-            let mut cooked_value = self.cooked_state_buf[i];
+            let raw_in = self.raw_state_buf[i];
+            let cooked_in = self.cooked_state_buf[i];
             let (out_min, out_max) = axis.output_range;
-            let span = (out_max as f64) - (out_min as f64);
             let out_mid = (((out_min as i64) + (out_max as i64)) / 2) as i32;
 
-            if self.cooked_awaiting_hid_sync[i] {
-                let raw_moved_to_center = raw_value != self.sync_ref_raw[i]
-                    && (raw_value - axis.calibration.center).abs() <= 1;
-                if cooked_value != out_mid || raw_moved_to_center {
+            if !self.awaiting_initial_hid_report && self.cooked_awaiting_hid_sync[i] {
+                let raw_moved_to_center = raw_in != self.sync_ref_raw[i]
+                    && (raw_in - axis.calibration.center).abs() <= 1;
+                if (cooked_in - out_mid).abs() > 1 || raw_moved_to_center {
                     self.cooked_awaiting_hid_sync[i] = false;
                 }
             }
 
-            let cooked_percent = if self.cooked_awaiting_hid_sync[i] {
-                let pct = evaluate_calibrated_output_pct(
-                    raw_value,
-                    axis.calibration,
-                    axis.deadzone,
-                    axis.saturation,
+            let (raw_value, cooked_value, cooked_percent) =
+                resolve_axis_telemetry_with_initial_guard(
+                    raw_in,
+                    cooked_in,
+                    &self.info,
+                    &self.mapping,
+                    axis,
+                    self.cooked_awaiting_hid_sync[i],
+                    self.awaiting_initial_hid_report,
                 );
-                if span.abs() > f64::EPSILON {
-                    cooked_value = ((out_min as f64) + (pct / 100.0) * span).round() as i32;
-                }
-                pct
-            } else if span.abs() > f64::EPSILON {
-                (((cooked_value as f64) - (out_min as f64)) / span * 100.0).clamp(0.0, 100.0)
-            } else {
-                0.0
-            };
 
             snapshots.push(AxisTelemetrySnapshot {
                 axis_index: axis.axis_index,
@@ -664,10 +715,10 @@ impl DualDeviceHandle {
             let _ = ((*(*self.p_cooked_device).lp_vtbl).poll)(self.p_cooked_device);
 
             // dinput8.dll resets `p_cooked_device`'s internal axis value to `(out_min + out_max) / 2`
-            // (`32767` = `50.0%`) after `SetProperty` / `Acquire` until the next USB HID report arrives.
-            if pos < self.cooked_awaiting_hid_sync.len() {
-                self.cooked_awaiting_hid_sync[pos] = true;
-                self.sync_ref_raw[pos] = self.raw_state_buf[pos];
+            // (`32767` = `50.0%`) across ALL axes after `Unacquire` + `SetProperty` + `Acquire`.
+            for i in 0..self.cooked_awaiting_hid_sync.len() {
+                self.cooked_awaiting_hid_sync[i] = true;
+                self.sync_ref_raw[i] = self.raw_state_buf[i];
             }
 
             Ok(LiveCalibrationOutcome {
@@ -684,6 +735,165 @@ impl DualDeviceHandle {
                 readback_saturation,
             })
         }
+    }
+}
+
+/// Resolves `(effective_raw, effective_cooked, cooked_percent)` for a single axis by cross-checking
+/// `p_raw_device` (`raw_value`) and `p_cooked_device` (`cooked_value`).
+///
+/// Ensures that if `p_cooked_device` sits on `dinput8.dll`'s `32767`/`32768` (`50.0%`) midpoint
+/// reset while `p_raw_device` reports live steering/pedal movement (or vice-versa), the live
+/// position is always reflected without freezing at `50.0%` (`0.0°`).
+pub fn resolve_live_axis_telemetry(
+    raw_value: i32,
+    cooked_value: i32,
+    axis: &AxisInfo,
+    awaiting_hid_sync: bool,
+) -> (i32, i32, f64) {
+    let (l_min, l_max) = axis.logical_range;
+    let l_span = (l_max as f64) - (l_min as f64);
+    let l_mid = (((l_min as i64) + (l_max as i64)) / 2) as i32;
+
+    let (out_min, out_max) = axis.output_range;
+    let out_span = (out_max as f64) - (out_min as f64);
+    let out_mid = (((out_min as i64) + (out_max as i64)) / 2) as i32;
+
+    let raw_at_reset_mid = (raw_value - l_mid).abs() <= 1;
+    let cooked_at_reset_mid = (cooked_value - out_mid).abs() <= 1;
+
+    let model_pct = evaluate_calibrated_output_pct(
+        raw_value,
+        axis.calibration,
+        axis.deadzone,
+        axis.saturation,
+    );
+    let driver_pct = if out_span.abs() > f64::EPSILON {
+        (((cooked_value as f64) - (out_min as f64)) / out_span * 100.0).clamp(0.0, 100.0)
+    } else {
+        50.0
+    };
+
+    if raw_at_reset_mid && !cooked_at_reset_mid && !awaiting_hid_sync {
+        let eff_raw = if l_span.abs() > f64::EPSILON
+            && axis.calibration == AxisCalibration::default_reset(l_min, l_max)
+        {
+            ((l_min as f64) + (driver_pct / 100.0) * l_span).round() as i32
+        } else {
+            raw_value
+        };
+        (eff_raw, cooked_value, driver_pct)
+    } else if awaiting_hid_sync
+        || (cooked_at_reset_mid && !raw_at_reset_mid)
+        || ((driver_pct - model_pct).abs() > 1.0 && !raw_at_reset_mid)
+    {
+        let eff_cooked = if out_span.abs() > f64::EPSILON {
+            ((out_min as f64) + (model_pct / 100.0) * out_span).round() as i32
+        } else {
+            cooked_value
+        };
+        (raw_value, eff_cooked, model_pct)
+    } else if out_span.abs() > f64::EPSILON {
+        (raw_value, cooked_value, driver_pct)
+    } else {
+        (raw_value, cooked_value, model_pct)
+    }
+}
+
+#[inline]
+fn range_midpoint(range: (i32, i32)) -> i32 {
+    (((range.0 as i64) + (range.1 as i64)) / 2) as i32
+}
+
+/// Returns `true` when EVERY axis simultaneously holds DirectInput8's un-synced
+/// synthetic midpoint buffer (`l_mid ± 1` raw AND `out_mid ± 1` cooked), indicating that
+/// `IDirectInputDevice8W::Acquire()` has not yet received a real hardware HID packet.
+pub fn all_axes_at_dinput_midpoint(
+    axes: &[AxisInfo],
+    raw_vals: &[i32],
+    cooked_vals: &[i32],
+) -> bool {
+    if axes.is_empty() || raw_vals.len() < axes.len() || cooked_vals.len() < axes.len() {
+        return false;
+    }
+    axes.iter().enumerate().all(|(i, axis)| {
+        let l_mid = range_midpoint(axis.logical_range);
+        let out_mid = range_midpoint(axis.output_range);
+        (raw_vals[i] - l_mid).abs() <= 1 && (cooked_vals[i] - out_mid).abs() <= 1
+    })
+}
+
+/// Returns `true` once any real hardware USB HID interrupt report updates DirectInput8
+/// (any axis leaves `l_mid ± 1` / `out_mid ± 1`, or any raw axis changes from `initial_probe_raw`).
+pub fn detect_initial_hid_report_arrival(
+    axes: &[AxisInfo],
+    raw_vals: &[i32],
+    cooked_vals: &[i32],
+    initial_probe_raw: &[i32],
+) -> bool {
+    if raw_vals.len() < axes.len() || cooked_vals.len() < axes.len() {
+        return false;
+    }
+    axes.iter().enumerate().any(|(i, axis)| {
+        let l_mid = range_midpoint(axis.logical_range);
+        let out_mid = range_midpoint(axis.output_range);
+        let raw_changed = initial_probe_raw.get(i).copied() != Some(raw_vals[i]);
+        raw_changed || (raw_vals[i] - l_mid).abs() > 1 || (cooked_vals[i] - out_mid).abs() > 1
+    })
+}
+
+/// Returns the safe physical resting raw encoder position (`0%` pedal press, centered `0°` steering)
+/// displayed prior to arrival of the first hardware HID report after `Acquire()`.
+pub fn axis_uninitialized_resting_raw(
+    device: &ControllerDeviceInfo,
+    mapping: &CockpitAxisMapping,
+    axis: &AxisInfo,
+) -> i32 {
+    let (l_min, l_max) = axis.logical_range;
+    if mapping.steering == Some(axis.dw_type) {
+        axis.calibration.center.clamp(l_min, l_max)
+    } else if mapping.clutch == Some(axis.dw_type)
+        || mapping.brake == Some(axis.dw_type)
+        || mapping.throttle == Some(axis.dw_type)
+    {
+        if default_pedal_inverted(device, axis) {
+            l_max
+        } else {
+            l_min
+        }
+    } else {
+        range_midpoint(axis.logical_range)
+    }
+}
+
+/// Resolves live telemetry while suppressing `dinput8.dll`'s pre-HID-report `50%` midpoint
+/// artifacts (e.g. `raw = 127` inflating calibrated `55%` Brake to `91%` before any pedal is touched).
+pub fn resolve_axis_telemetry_with_initial_guard(
+    raw_in: i32,
+    cooked_in: i32,
+    device: &ControllerDeviceInfo,
+    mapping: &CockpitAxisMapping,
+    axis: &AxisInfo,
+    cooked_awaiting_hid_sync: bool,
+    awaiting_initial_hid_report: bool,
+) -> (i32, i32, f64) {
+    if awaiting_initial_hid_report {
+        let rest_raw = axis_uninitialized_resting_raw(device, mapping, axis);
+        let rest_pct = evaluate_calibrated_output_pct(
+            rest_raw,
+            axis.calibration,
+            axis.deadzone,
+            axis.saturation,
+        );
+        let (out_min, out_max) = axis.output_range;
+        let out_span = (out_max as f64) - (out_min as f64);
+        let eff_cooked = if out_span.abs() > f64::EPSILON {
+            ((out_min as f64) + (rest_pct / 100.0) * out_span).round() as i32
+        } else {
+            cooked_in
+        };
+        (rest_raw, eff_cooked, rest_pct)
+    } else {
+        resolve_live_axis_telemetry(raw_in, cooked_in, axis, cooked_awaiting_hid_sync)
     }
 }
 
@@ -796,6 +1006,235 @@ mod tests {
         assert_eq!(mapped.brake, Some(0x0000_0502));
         assert_eq!(mapped.throttle, Some(0x0000_0202));
         assert!(default_pedal_inverted(&g920, &g920.axes[2]));
+    }
+
+    #[test]
+    fn test_resolve_live_axis_telemetry_steering_fallback() {
+        use crate::dinput_ffi::GUID_XAXIS;
+
+        let wheel_axis = AxisInfo {
+            axis_index: 0,
+            dw_type: 0x0100_0002,
+            instance_id: 0,
+            name: "Wheel axis".to_string(),
+            guid_type: GUID_XAXIS,
+            standard_label: "X Axis",
+            logical_range: (0, 65535),
+            physical_range: (0, 65535),
+            output_range: (0, 65535),
+            calibration: AxisCalibration::default_reset(0, 65535),
+            deadzone: 0,
+            saturation: 10_000,
+        };
+
+        // When p_cooked_device is stuck at dinput8.dll's 32767 (50%) buffer reset,
+        // full left/quarter/three-quarter/right raw angles must still track live.
+        let (r_left, c_left, p_left) = resolve_live_axis_telemetry(0, 32767, &wheel_axis, false);
+        assert_eq!(r_left, 0);
+        assert_eq!(c_left, 0);
+        assert!((p_left - 0.0).abs() < 0.05);
+
+        let (r_q1, c_q1, p_q1) = resolve_live_axis_telemetry(16384, 32767, &wheel_axis, false);
+        assert_eq!(r_q1, 16384);
+        assert!((c_q1 - 16384).abs() <= 2);
+        assert!((p_q1 - 25.0).abs() < 0.05);
+
+        let (r_q3, c_q3, p_q3) = resolve_live_axis_telemetry(49152, 32767, &wheel_axis, false);
+        assert_eq!(r_q3, 49152);
+        assert!((c_q3 - 49152).abs() <= 2);
+        assert!((p_q3 - 75.0).abs() < 0.05);
+
+        let (r_right, c_right, p_right) =
+            resolve_live_axis_telemetry(65535, 32767, &wheel_axis, false);
+        assert_eq!(r_right, 65535);
+        assert_eq!(c_right, 65535);
+        assert!((p_right - 100.0).abs() < 0.05);
+
+        // Conversely, if only cooked_value moves while raw sits at logical midpoint, track cooked.
+        let (r_drv, c_drv, p_drv) = resolve_live_axis_telemetry(32767, 16384, &wheel_axis, false);
+        assert!((r_drv - 16384).abs() <= 2);
+        assert_eq!(c_drv, 16384);
+        assert!((p_drv - 25.0).abs() < 0.05);
+
+        // And with awaiting_hid_sync after calibration re-acquire, raw drives output at center too.
+        let (_, _, p_sync) = resolve_live_axis_telemetry(32767, 32767, &wheel_axis, true);
+        assert!((p_sync - 50.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn test_initial_hid_report_guard_suppresses_50_and_91_pct_startup_artifacts() {
+        use crate::calibration::compute_pedal_press_percentages;
+        use crate::dinput_ffi::{GUID_RZAXIS, GUID_SLIDER, GUID_XAXIS, GUID_YAXIS};
+
+        let mk_axis = |idx: usize,
+                       dw_type: u32,
+                       name: &str,
+                       guid: Guid,
+                       label: &'static str,
+                       max: i32,
+                       cal: AxisCalibration| AxisInfo {
+            axis_index: idx,
+            dw_type,
+            instance_id: idx as u16,
+            name: name.to_string(),
+            guid_type: guid,
+            standard_label: label,
+            logical_range: (0, max),
+            physical_range: (0, max),
+            output_range: (0, 65_535),
+            calibration: cal,
+            deadzone: 0,
+            saturation: 10_000,
+        };
+
+        let g920 = ControllerDeviceInfo {
+            index: 0,
+            instance_name: "Logitech G HUB G920 Driving Force Racing Wheel USB".to_string(),
+            product_name: "Logitech G HUB G920 Driving Force Racing Wheel USB".to_string(),
+            guid_instance: GUID_XAXIS,
+            guid_product: GUID_XAXIS,
+            vid: 0x046D,
+            pid: 0xC262,
+            has_ffb: true,
+            num_buttons: 18,
+            num_povs: 1,
+            axes: vec![
+                mk_axis(
+                    0,
+                    0x0100_0002,
+                    "Wheel axis",
+                    GUID_XAXIS,
+                    "X Axis",
+                    65_535,
+                    AxisCalibration::default_reset(0, 65_535),
+                ),
+                mk_axis(
+                    1,
+                    0x0000_0602,
+                    "Clutch",
+                    GUID_SLIDER,
+                    "Slider",
+                    255,
+                    AxisCalibration::default_reset(0, 255),
+                ),
+                mk_axis(
+                    2,
+                    0x0000_0502,
+                    "Brake",
+                    GUID_RZAXIS,
+                    "Rz Axis",
+                    255,
+                    AxisCalibration {
+                        min: 115,
+                        center: 185,
+                        max: 255,
+                    }, // 55% Saturation saved
+                ),
+                mk_axis(
+                    3,
+                    0x0000_0202,
+                    "Accelerator",
+                    GUID_YAXIS,
+                    "Y Axis",
+                    255,
+                    AxisCalibration::default_reset(0, 255),
+                ),
+            ],
+        };
+        let mapping = CockpitAxisMapping::detect(&g920);
+
+        // Exact initial buffer reported by dinput8.dll on cold Acquire() before any HID packet arrives:
+        let init_raw = [32_767, 127, 127, 127];
+        let init_cooked = [32_768, 32_768, 32_768, 32_768];
+        assert!(all_axes_at_dinput_midpoint(
+            &g920.axes,
+            &init_raw,
+            &init_cooked
+        ));
+        assert!(!detect_initial_hid_report_arrival(
+            &g920.axes,
+            &init_raw,
+            &init_cooked,
+            &init_raw
+        ));
+
+        // Re-acquiring p_cooked_device (`32768 -> 32767`) must NOT prematurely dismiss the initial guard
+        assert!(!detect_initial_hid_report_arrival(
+            &g920.axes,
+            &init_raw,
+            &[32_767, 32_767, 32_767, 32_767],
+            &init_raw
+        ));
+
+        // While awaiting first HID report, Brake (even at 55% Saturation!) and Clutch/Accel report 0% rest
+        for i in 1..=3 {
+            let (raw, cooked, pct) = resolve_axis_telemetry_with_initial_guard(
+                init_raw[i],
+                init_cooked[i],
+                &g920,
+                &mapping,
+                &g920.axes[i],
+                false,
+                true,
+            );
+            assert_eq!(raw, 255, "axis {} rest raw must be 255", g920.axes[i].name);
+            assert_eq!(cooked, 65_535);
+            let (phys_pct, out_pct) =
+                compute_pedal_press_percentages(raw, g920.axes[i].logical_range, pct, true);
+            assert!(phys_pct.abs() < 1e-6 && out_pct.abs() < 1e-6);
+        }
+
+        // Steering remains safely centered (`50.0%` -> `0.0°`)
+        let (st_raw, st_cooked, st_pct) = resolve_axis_telemetry_with_initial_guard(
+            init_raw[0],
+            init_cooked[0],
+            &g920,
+            &mapping,
+            &g920.axes[0],
+            false,
+            true,
+        );
+        assert_eq!(st_raw, 32_768);
+        assert_eq!(st_cooked, 32_768);
+        assert!((st_pct - 50.0).abs() < 0.05);
+
+        // Once user taps ANY pedal (e.g. Accelerator pressed slightly to 230, rest idle at 255):
+        let live_raw = [32_768, 255, 255, 230];
+        let live_cooked = [32_768, 65_535, 65_535, 59_110];
+        assert!(detect_initial_hid_report_arrival(
+            &g920.axes,
+            &live_raw,
+            &live_cooked,
+            &init_raw
+        ));
+        let (b_raw, _, b_pct) = resolve_axis_telemetry_with_initial_guard(
+            live_raw[2],
+            live_cooked[2],
+            &g920,
+            &mapping,
+            &g920.axes[2],
+            false,
+            false,
+        );
+        assert_eq!(b_raw, 255);
+        assert!((b_pct - 100.0).abs() < 0.05);
+
+        // Non-inverted generic pedal (`VID = 0x0EB7` Fanatec) rests at `l_min = 0` (`0%`)
+        let mut fanatec = g920.clone();
+        fanatec.vid = 0x0EB7;
+        for ax in &mut fanatec.axes {
+            ax.calibration = AxisCalibration::default_reset(0, ax.logical_range.1);
+        }
+        assert_eq!(
+            axis_uninitialized_resting_raw(&fanatec, &mapping, &fanatec.axes[2]),
+            0
+        );
+        // If a streaming controller already emits `0` on Clutch/Brake/Accel at open, guard stays off
+        assert!(!all_axes_at_dinput_midpoint(
+            &fanatec.axes,
+            &[32_768, 0, 0, 0],
+            &[32_768, 0, 0, 0]
+        ));
     }
 }
 

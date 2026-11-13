@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Reproducible Portable Release Packager for Speed Precise v1.0.0 (Windows x64).
+Reproducible Portable Release Packager for Speed Precise (Windows x64).
 
 Builds the optimized standalone workspace (`cargo build --release --workspace`),
 verifies PE32+ portability invariants (`IMAGE_SUBSYSTEM_WINDOWS_GUI == 2` and zero
@@ -10,14 +10,15 @@ external VC++ runtime DLL dependencies), and packages:
   - `dist/SpeedPrecise/LEIA-ME.txt`
   - `dist/SpeedPrecise/README.md`
   - `dist/SpeedPrecise/LICENSE`
-  - `dist/SpeedPrecise-v1.0.0-win64-portable.zip`
-  - `dist/SpeedPrecise-v1.0.0-win64-portable.zip.sha256`
+  - `dist/SpeedPrecise-v<VERSION>-win64-portable.zip`
+  - `dist/SpeedPrecise-v<VERSION>-win64-portable.zip.sha256`
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -26,11 +27,21 @@ import zipfile
 from pathlib import Path
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
-VERSION = "1.0.0"
+
+
+def read_workspace_version(cargo_toml: Path) -> str:
+    text = cargo_toml.read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, flags=re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"Could not read `[workspace.package].version` from {cargo_toml}")
+    return match.group(1)
+
+
+VERSION = read_workspace_version(WORKSPACE_ROOT / "Cargo.toml")
 ZIP_BASENAME = f"SpeedPrecise-v{VERSION}-win64-portable.zip"
 
-LEIA_ME_CONTENT = """================================================================================
- SPEED PRECISE v1.0.0 — GUIA RÁPIDO (WINDOWS x64 PORTÁTIL)
+LEIA_ME_CONTENT = f"""================================================================================
+ SPEED PRECISE v{VERSION} — GUIA RÁPIDO (WINDOWS x64 PORTÁTIL)
 ================================================================================
 
 Aplicativo 100% portátil. Basta abrir o SpeedPrecise.exe com o volante conectado.

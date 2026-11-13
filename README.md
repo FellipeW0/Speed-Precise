@@ -1,4 +1,4 @@
-# Speed Precise v1.0.0
+# Speed Precise v1.0.1
 
 **Calibração Nativa DirectInput8 de Volante e Pedais, Ensaio Force Feedback `Step Log 2` (1000 Hz) e Gerador Automático de LUT em um Único Executável Portátil para Windows.**
 
@@ -11,7 +11,7 @@
 
 ## Visão Geral
 
-O **Speed Precise v1.0** foi desenvolvido para substituir e unificar todo o fluxo de calibração de pedais, análise de Force Feedback e geração de curvas LUT em **um único aplicativo nativo em Rust (`SpeedPrecise.exe`)**, 100% portátil, sem instaladores ou dependências de `.NET` ou `VC++ Redistributable`, projetado com foco em precisão de nível de driver e segurança mecânica para volantes USB DirectInput8 (Logitech G25/G27/G29/G920/G923, Thrustmaster, Fanatec e pedaleiras USB dedicadas).
+O **Speed Precise v1.0.1** foi desenvolvido para substituir e unificar todo o fluxo de calibração de pedais, análise de Force Feedback e geração de curvas LUT em **um único aplicativo nativo em Rust (`SpeedPrecise.exe`)**, 100% portátil, sem instaladores ou dependências de `.NET` ou `VC++ Redistributable`, projetado com foco em precisão de nível de driver e segurança mecânica para volantes USB DirectInput8 (Logitech G25/G27/G29/G920/G923, Thrustmaster, Fanatec e pedaleiras USB dedicadas).
 
 A calibração de pedais, a análise da resposta dos motores de Force Feedback e a geração de curvas LUT são tarefas tradicionalmente distribuídas entre **três utilitários independentes** — *DIView* (para calibrar curso e zona morta de pedais no driver DirectInput), *WheelCheck* (para medir a resposta não-linear e a zona morta mecânica dos motores de Force Feedback) e *LUT Generator* (para converter o `log2.csv` em uma tabela `.lut` para o Assetto Corsa).
 
@@ -21,13 +21,13 @@ A calibração de pedais, a análise da resposta dos motores de Force Feedback e
 
 Não é necessário instalar nada no Windows:
 
-1. Acesse a página de [**Releases no GitHub**](../../releases) e baixe o pacote **`SpeedPrecise-v1.0.0-win64-portable.zip`**.
+1. Acesse a página de [**Releases no GitHub**](https://github.com/FellipeW0/Speed-Precise/releases) e baixe o pacote **`SpeedPrecise-v1.0.1-win64-portable.zip`**.
 2. Extraia o conteúdo do arquivo `.zip` em qualquer pasta de sua preferência.
 3. Conecte seu volante e/ou pedaleira USB ao computador e execute **`SpeedPrecise.exe`**.
 
-> **Verificação de Integridade (Opcional):** O arquivo `SpeedPrecise-v1.0.0-win64-portable.zip.sha256` disponibilizado junto à Release permite validar o hash SHA-256 do pacote baixado via PowerShell:
+> **Verificação de Integridade (Opcional):** O arquivo `SpeedPrecise-v1.0.1-win64-portable.zip.sha256` disponibilizado junto à Release permite validar o hash SHA-256 do pacote baixado via PowerShell:
 > ```powershell
-> Get-FileHash .\SpeedPrecise-v1.0.0-win64-portable.zip -Algorithm SHA256
+> Get-FileHash .\SpeedPrecise-v1.0.1-win64-portable.zip -Algorithm SHA256
 > ```
 
 ---
@@ -106,7 +106,7 @@ speed-precise/
 # Executar a suíte completa de testes unitários e de regressão (0 warnings)
 python run_regression_tests.py
 
-# Compilar e gerar o pacote portátil completo em dist/SpeedPrecise-v1.0.0-win64-portable.zip
+# Compilar e gerar o pacote portátil completo em dist/SpeedPrecise-v1.0.1-win64-portable.zip
 python build_portable_release.py
 ```
 

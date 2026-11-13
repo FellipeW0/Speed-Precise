@@ -6,6 +6,22 @@ O formato segue os princípios do [Keep a Changelog](https://keepachangelog.com/
 
 ---
 
+## [1.0.1] - 2026-11-12
+
+### Corrigido
+- **Barra de Ângulo do Volante em Tempo Real (`Volante e Pedais`):**
+  - Corrigida a falha visual em que o indicador de ângulo horizontal do volante podia ficar congelado quando o handle `pCookedDevice` do `dinput8.dll` permanecia preso em `32768` (`50%`) ou aguardando sincronismo após `Unacquire()`/`Acquire()`/`SetProperty()`.
+  - Adicionada lógica unificada de resolução dual-handle (`resolve_live_axis_telemetry` em `device.rs` e `compute_live_steering_angle_and_pct` em `app.rs`) com inicialização completa de `output_range` + `DIPROP_CALIBRATIONMODE = 0` + `Poll()` em `pCookedDevice`, ressincronização explícita de todos os eixos e remoção do recorte de `1 px` na borda superior do marcador em `paint_horizontal_steering_gauge`.
+- **Leituras Fantasmas (`50%` e `91%`) ao Reconhecer o Controle:**
+  - Corrigido o comportamento do `dinput8.dll` em que, logo após conectar/adquirir volantes ociosos que ainda não enviaram o primeiro pacote HID USB (verificado no Logitech G920 via G HUB), o DirectInput preenchia `raw = [32767, 127, 127, 127]` e `cooked = [32768; 4]`, exibindo falsamente `50%` em Embreagem/Acelerador e `91%` no Freio (quando calibrado para `55%` de saturação) até o primeiro toque nos pedais.
+  - Adicionada guarda de pacote HID inicial em `DualDeviceHandle` (`all_axes_at_dinput_midpoint`, `detect_initial_hid_report_arrival`, `axis_uninitialized_resting_raw` e `resolve_axis_telemetry_with_initial_guard`) para mapear eixos ainda sem pacote HID real à posição exata de repouso (`0%` nos pedais, `0.0°` no volante) desde a abertura do app.
+
+### Alterado
+- Atualização de versão do workspace Cargo, executáveis portáteis (`SpeedPrecise.exe` e `speed-precise-cli.exe`) e pacotes de distribuição para **`1.0.1`** (SemVer).
+- Leitura automática da versão diretamente do `Cargo.toml` pelo script `build_portable_release.py` e atualização dos metadados/links de repositório para `FellipeW0/Speed-Precise`.
+
+---
+
 ## [1.0.0] - 2026-11-01
 
 ### Adicionado

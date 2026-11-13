@@ -1,4 +1,4 @@
-# Speed Precise v1.0.0 — Portable Windows x64 Build Configuration
+# Speed Precise — Portable Windows x64 Build Configuration
 # Statically links the MSVC C Runtime (`libvcruntime` / `libucrt`) so `SpeedPrecise.exe`
 # and `speed-precise-cli.exe` run standalone on any Windows 10/11 x64 PC without
 # requiring external VC++ Redistributable (`vcruntime140.dll`) installations.

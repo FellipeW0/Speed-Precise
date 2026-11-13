@@ -10,6 +10,7 @@
 /decompiled _apps/
 /decompiled_apps/
 /Documentation/
+/dev_apps/
 /ghidra_*/
 /DIView/
 /WheelCheck/
@@ -26,7 +27,9 @@
 *.log
 *.tmp
 
-# OS & Editor Metadata
+# OS, Python & Editor Metadata
+__pycache__/
+*.pyc
 .DS_Store
 Thumbs.db
 desktop.ini
