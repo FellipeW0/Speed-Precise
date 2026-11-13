@@ -8,6 +8,10 @@ O formato segue os princípios do [Keep a Changelog](https://keepachangelog.com/
 
 ## [1.0.1] - 2026-11-12
 
+### Adicionado
+- **Ícone Oficial do Aplicativo (`Speed_Precise.ico`):**
+  - Incorporação nativa do ícone oficial (`256×256`) nos recursos PE do Windows (`RT_ICON` / `RT_GROUP_ICON` + metadados `VS_VERSION_INFO` em `SpeedPrecise.exe` via `build.rs`), no ícone da janela e barra de tarefas (`ViewportBuilder::with_icon`) e no emblema de marca do cabeçalho superior.
+
 ### Corrigido
 - **Barra de Ângulo do Volante em Tempo Real (`Volante e Pedais`):**
   - Corrigida a falha visual em que o indicador de ângulo horizontal do volante podia ficar congelado quando o handle `pCookedDevice` do `dinput8.dll` permanecia preso em `32768` (`50%`) ou aguardando sincronismo após `Unacquire()`/`Acquire()`/`SetProperty()`.

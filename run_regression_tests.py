@@ -93,8 +93,8 @@ def run_step(
     return True
 
 
-def _inspect_pe_subsystem_and_imports(exe_path: Path) -> tuple[int, list[str]]:
-    """Parses PE32+ header of `exe_path` to return `(subsystem, imported_dll_names)`."""
+def _inspect_pe_subsystem_and_imports(exe_path: Path) -> tuple[int, list[str], list[int]]:
+    """Parses PE32+ header of `exe_path` to return `(subsystem, imported_dll_names, rsrc_type_ids)`."""
     data = exe_path.read_bytes()
     pe_off = struct.unpack_from("<I", data, 0x3C)[0]
     if data[pe_off : pe_off + 4] != b"PE\x00\x00":
@@ -108,6 +108,7 @@ def _inspect_pe_subsystem_and_imports(exe_path: Path) -> tuple[int, list[str]]:
 
     dd_off = opt_off + (112 if magic == 0x20B else 96)
     import_rva, import_size = struct.unpack_from("<II", data, dd_off + 8)
+    rsrc_rva, rsrc_size = struct.unpack_from("<II", data, dd_off + 16)
 
     sec_off = opt_off + opt_size
     sections: list[tuple[int, int, int]] = []
@@ -137,7 +138,17 @@ def _inspect_pe_subsystem_and_imports(exe_path: Path) -> tuple[int, list[str]]:
                         dlls.append(data[noff:end].decode("ascii", errors="replace"))
                 imp_off += 20
 
-    return subsystem, dlls
+    rsrc_ids: list[int] = []
+    if rsrc_rva and rsrc_size:
+        rsrc_off = rva_to_off(rsrc_rva)
+        if rsrc_off is not None and rsrc_off + 16 <= len(data):
+            named_cnt, id_cnt = struct.unpack_from("<HH", data, rsrc_off + 12)
+            for idx in range(id_cnt):
+                entry_off = rsrc_off + 16 + (named_cnt + idx) * 8
+                if entry_off + 8 <= len(data):
+                    rsrc_ids.append(struct.unpack_from("<I", data, entry_off)[0])
+
+    return subsystem, dlls, rsrc_ids
 
 
 def verify_gui_binary_exists() -> bool:
@@ -159,7 +170,7 @@ def verify_gui_binary_exists() -> bool:
             return False
         print(f"       CLI    (release): {rel_cli} ({rel_cli.stat().st_size / 1024.0:.1f} KiB)")
 
-        subsystem, dlls = _inspect_pe_subsystem_and_imports(rel_gui)
+        subsystem, dlls, rsrc_ids = _inspect_pe_subsystem_and_imports(rel_gui)
         # IMAGE_SUBSYSTEM_WINDOWS_GUI == 2 (no black console window on double-click)
         if subsystem != 2:
             print(f"[FAIL] Expected PE Subsystem 2 (WINDOWS_GUI) on release GUI, got {subsystem}")
@@ -170,7 +181,15 @@ def verify_gui_binary_exists() -> bool:
             print(f"[FAIL] Found non-portable dynamic VC++ runtime DLL dependencies: {forbidden}")
             return False
 
+        for required_id, label in ((3, "RT_ICON"), (14, "RT_GROUP_ICON"), (16, "RT_VERSION")):
+            if required_id not in rsrc_ids:
+                print(
+                    f"[FAIL] Missing embedded PE resource {label} ({required_id}) in {rel_gui}: found {rsrc_ids}"
+                )
+                return False
+
         print(f"       PE Subsystem    : {subsystem} (IMAGE_SUBSYSTEM_WINDOWS_GUI — zero console window)")
+        print(f"       PE Resources    : {rsrc_ids} (RT_ICON + RT_GROUP_ICON + RT_VERSION verified)")
         print(f"       System DLLs Only: {', '.join(dlls)}")
 
     print("[PASS] Verified standalone portable `speed-precise-gui` & `speed-precise-cli` binaries")
